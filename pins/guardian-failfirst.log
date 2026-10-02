@@ -1,0 +1,5 @@
+FAIL G1 discharge-reason-persists — in-file=False reload-reason=None
+FAIL G2 atomic-rewrite — entries loadable after crash=0/2
+FAIL G3 truncation-named — error='Unterminated string starting at: line 1 column 21 (char 20)'
+FAIL G4 id-unique — duplicate id accepted at add()
+FAIL G4b discharge-unknown-loud — silent no-op on unknown id
