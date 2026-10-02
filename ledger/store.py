@@ -21,21 +21,31 @@ class Store:
             self._load()
 
     def _load(self):
+        seen = set()
         with open(self.file) as f:
             for i, line in enumerate(f.read().splitlines()):
                 if not line.strip():
                     continue
-                rec = json.loads(line)
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    raise ValueError(f"ledger truncated/corrupt at line {i} "
+                                     f"— refusing to load")
                 want = _checksum(rec["id"], json.dumps(rec["entry"],
                                  sort_keys=True, separators=(",", ":")))
                 if rec.get("sum") != want:
                     raise ValueError(f"ledger tampered at line {i} "
                                      f"(id {rec.get('id')}) — append-only violated")
+                if rec["id"] in seen:
+                    raise ValueError(f"duplicate entry id {rec['id']} at line {i}")
+                seen.add(rec["id"])
                 e = rec["entry"]
                 from ledger.entry import Entry
                 self.entries.append(Entry(**{k: e[k] for k in e}))
 
     def add(self, entry):
+        if any(e.id == entry.id for e in self.entries):
+            raise ValueError(f"duplicate entry id {entry.id} — refusing to add")
         body = json.dumps(entry.to_dict(), sort_keys=True, separators=(",", ":"))
         rec = {"id": entry.id, "sum": _checksum(entry.id, body), "entry": entry.to_dict()}
         with open(self.file, "a") as f:
@@ -68,12 +78,26 @@ class Store:
             if e.id == entry_id:
                 e.status = "discharged"
                 e.discharge_reason = reason
-        self._rewrite()
+                self._rewrite()
+                return
+        raise ValueError(f"discharge: no entry with id {entry_id}")
 
     def _rewrite(self):
-        with open(self.file, "w") as f:
-            for e in self.entries:
-                body = json.dumps(e.to_dict(), sort_keys=True, separators=(",", ":"))
-                f.write(json.dumps({"id": e.id, "sum": _checksum(e.id, body),
-                                    "entry": e.to_dict()},
-                                   sort_keys=True, separators=(",", ":")) + "\n")
+        tmp = self.file + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                for e in self.entries:
+                    body = json.dumps(e.to_dict(), sort_keys=True,
+                                      separators=(",", ":"))
+                    f.write(json.dumps({"id": e.id, "sum": _checksum(e.id, body),
+                                        "entry": e.to_dict()},
+                                       sort_keys=True, separators=(",", ":")) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.file)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise

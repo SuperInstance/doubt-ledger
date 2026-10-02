@@ -1,0 +1,5 @@
+PASS G1 discharge-reason-persists — in-file=True reload-reason='re-read the diff; guard verified'
+PASS G2 atomic-rewrite — entries loadable after crash=2/2
+PASS G3 truncation-named — error='ledger truncated/corrupt at line 1 — refusing to load'
+PASS G4 id-unique — rejected: duplicate entry id deadbeefcafe — refusing to add
+PASS G4b discharge-unknown-loud — raises on unknown id
