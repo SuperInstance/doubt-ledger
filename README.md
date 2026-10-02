@@ -38,17 +38,25 @@ blindness again.
 | P3 | fire-and-due — a trigger fires exactly its entries, marks them `due`, discharge demands a reason |
 | P4 | git-resume — checkpoints commit the ledger; a fresh process over the same dir resumes byte-identical |
 | P5 | coverage-query — "what is trust letting through HERE" is always answerable by substring |
+| P6 | selective-disclosure export — a filtered slice writes itself as a standalone file with recomputed per-entry checksums, bound to the live tip root |
+| P7 | root-signing — the fnv1a-64 tip root (chain over per-line checksums, genesis-anchored) is Ed25519-signable; one signature covers every entry by induction |
 
-Run: `python3 tests/pins_ledger.py` (stdlib only; FAIL-first log in
-`pins/failfirst.log`).
+Run: `python3 tests/pins_ledger.py` and `python3 tests/pins_export.py`
+(core stdlib only; signing needs `cryptography`. FAIL-first logs in
+`pins/failfirst.log`, `pins/failfirst-wave2.log`).
 
 ## Honest limits
 
 1. The ledger records doubt, it doesn't rank it — a cheap doubt and an
    existential one take the same five fields. Severity is unbuilt.
-2. The checksum is fnv1a-64 (integrity mark, not a signature).
+2. The checksum is fnv1a-64 (integrity mark, not a signature) — mitigated,
+   not solved, by P7's optional Ed25519 root signature: one honest key holder
+   still stands between the ledger and a forged tip.
 3. Condition expressions are exact-string matches, not a real expression
    language.
 4. Nobody audits the ledger-keeper. A doubt-ledger that lies about its own
    entries is just a diary. (Pins prove the store refuses tampering *on load*
    — but the keeper chooses when to load.)
+5. An export proves its included entries are byte-intact; it does not prove
+   the filter was complete. Selective disclosure hides by construction —
+   completeness is the verifier's question, never the exporter's claim.
