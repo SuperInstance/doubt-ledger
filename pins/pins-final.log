@@ -1,0 +1,5 @@
+PASS P1 grammar-enforced — rejected naming field=True
+PASS P2 append-only — tamper refused
+PASS P3 fire-and-due — due-exact=True others-untouched=True
+PASS P4 git-resume — identical=True commit=True
+PASS P5 coverage-query — hits=1
