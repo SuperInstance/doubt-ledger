@@ -86,6 +86,55 @@ def qmr1_sign(secret, rid):
                         hashlib.sha256).hexdigest()
 
 
+def _qmr2_attribution_body(e):
+    """qmr2-§8 attribution rows still carry qmr1's required body envelope.
+
+    The qmr1 verifier rejects a body without non-empty string kind/ts. Keep the
+    original entry record nested under `entry` so the export remains selective
+    disclosure and the per-entry checksum is still present.
+    """
+    rec = _entry_record(e)
+    return {"kind": e.kind or "event", "ts": str(e.ts),
+            "id": rec["id"], "sum": rec["sum"], "entry": rec["entry"]}
+
+
+def _qmr2_signer(signer):
+    """Normalize signer= into (fingerprint, sign(id)).
+
+    signer is an Ed25519 private key PEM (bytes or str). The fingerprint is
+    the qmr2-§8 law shared with quilt-jev-toolkit/quilt-mcp-receipts:
+    sha256 over the normalized SPKI PEM, trailing newline included.
+    """
+    if isinstance(signer, str):
+        signer = signer.encode()
+    if not isinstance(signer, bytes):
+        raise ValueError("signer= must be an Ed25519 private key PEM")
+    try:
+        from ledger.sign import HAVE_CRYPTO
+        if not HAVE_CRYPTO:
+            raise RuntimeError("cryptography package required for qmr2 attribution")
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        private_key = serialization.load_pem_private_key(signer, password=None)
+        if not isinstance(private_key, Ed25519PrivateKey):
+            raise ValueError("signer= must be an Ed25519 private key PEM")
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise ValueError(f"signer= is not a loadable Ed25519 private key PEM: {e}") from e
+
+    fingerprint = hashlib.sha256(public_pem).hexdigest()
+
+    def sign(rid):
+        return private_key.sign(("qmr1:sig:" + rid).encode()).hex()
+
+    return fingerprint, sign
+
+
 def _qmr1_secret(secret):
     """Resolve the HMAC secret. Explicit arg wins; else env
     DOUBT_QMR1_SECRET / MCP_RECEIPT_SECRET (same variable the qmr1
@@ -104,22 +153,40 @@ def _qmr1_secret(secret):
     return ""
 
 
-def export_qmr1(store, predicate, out_path, secret=None):
+def export_qmr1(store, predicate, out_path, secret=None, signer=None):
     """Write entries matching predicate as a qmr1-compatible receipt chain.
 
-    Each line is exactly the five qmr1 fields (seq, prev, body, id, sig);
-    body = our entry record, so every byte of the export owes nothing to
-    the source file. Returns the number of receipts written. Re-serialized
-    or key-reordered lines still verify — only value edits break the id."""
+    signer=None (default) emits the unchanged wave-3 dialect: exactly five
+    qmr1 fields per line (seq, prev, body, id, sig), body = our entry record,
+    sig = HMAC-SHA256(secret, "qmr1:sig:" + id).
+
+    signer=<Ed25519 private key PEM> opts an exported row into qmr2 §8
+    attribution: sigAlg="ed25519", sigKeyFp=sha256(SPKI PEM), and sig =
+    Ed25519("qmr1:sig:" + id). Rows without sigAlg remain byte-unchanged
+    HMAC/qmr1 rows. The attribution body carries qmr1's required kind/ts
+    envelope around the same entry record. Attribution refuses the empty dev
+    secret — identity is not a fallback-mode feature.
+    """
     picked = [e for e in store.entries if predicate(e)]
     secret = _qmr1_secret(secret)
+    signer_fp = signer_sign = None
+    if signer is not None:
+        if secret == "":
+            raise ValueError("attribution export refuses the empty dev secret — "
+                             "set DOUBT_QMR1_SECRET/MCP_RECEIPT_SECRET or pass secret=")
+        signer_fp, signer_sign = _qmr2_signer(signer)
     prev = GENESIS_PREV_QMR1
     with open(out_path, "w") as f:
         for seq, e in enumerate(picked, start=1):
-            body = _entry_record(e)
+            body = _qmr2_attribution_body(e) if signer is not None else _entry_record(e)
             rid = qmr1_id(seq, prev, body)
-            row = {"seq": seq, "prev": prev, "body": body,
-                   "id": rid, "sig": qmr1_sign(secret, rid)}
+            row = {"seq": seq, "prev": prev, "body": body, "id": rid}
+            if signer is None:
+                row["sig"] = qmr1_sign(secret, rid)
+            else:
+                row["sig"] = signer_sign(rid)
+                row["sigAlg"] = "ed25519"
+                row["sigKeyFp"] = signer_fp
             f.write(_canonical(row) + "\n")
             prev = rid
     return len(picked)
